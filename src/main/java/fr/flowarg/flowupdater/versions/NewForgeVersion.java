@@ -13,14 +13,10 @@ import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.lang.ProcessBuilder.Redirect;
-import java.net.URL;
-import java.nio.file.Files;
-import java.nio.file.StandardCopyOption;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Represent a new Forge version (1.12.2-14.23.5.2851 -> 1.16.3)
+ * Represent a new Forge version (1.12.2-14.23.5.2851 -> 1.16.5)
  * @author FlowArg
  */
 public class NewForgeVersion extends AbstractForgeVersion
@@ -30,7 +26,7 @@ public class NewForgeVersion extends AbstractForgeVersion
 
     NewForgeVersion(String forgeVersion, VanillaVersion vanilla, ILogger logger, IProgressCallback callback, List<Mod> mods, List<CurseFileInfos> curseMods, boolean noGui, ModFileDeleter fileDeleter, OptifineInfo optifine, CurseModPackInfos modPack)
     {
-        super(logger, mods, curseMods, forgeVersion, vanilla, callback, fileDeleter, optifine, modPack);
+        super(logger, mods, curseMods, forgeVersion, vanilla, callback, fileDeleter, optifine, modPack, false);
         this.noGui = noGui;
     }
 
@@ -42,49 +38,17 @@ public class NewForgeVersion extends AbstractForgeVersion
         {
             try (BufferedInputStream stream = new BufferedInputStream(this.installerUrl.openStream()))
             {
-                this.logger.info("Downloading new forge installer...");
-                final File tempDir = new File(dirToInstall, ".flowupdater");
-                final File tempInstallerDir = new File(tempDir, "installer/");
-                final File install = new File(tempDir, "forge-installer.jar");
-                final File patches = new File(tempDir, "patches.jar");
-                final File patchedInstaller = new File(tempDir, "forge-installer-patched.jar");
-                FileUtils.deleteDirectory(tempInstallerDir);
-                install.delete();
-                patchedInstaller.delete();
-                patches.delete();
-                tempDir.mkdirs();
-                tempInstallerDir.mkdirs();
-
-                Files.copy(stream, install.toPath(), StandardCopyOption.REPLACE_EXISTING);
-                this.logger.info("Downloading patches...");
-                Files.copy(new URL("https://flowarg.github.io/minecraft/launcher/patches.jar").openStream(), patches.toPath(), StandardCopyOption.REPLACE_EXISTING);
-
-                this.logger.info("Applying patches...");
-                FileUtils.unzipJarWithLZMACompat(tempInstallerDir, install);
-                this.cleaningInstaller(tempInstallerDir);
-                FileUtils.unzipJarWithLZMACompat(tempInstallerDir, patches);
-                this.logger.info("Repack installer...");
-                this.packPatchedInstaller(tempDir, tempInstallerDir);
-                patches.delete();
-                this.logger.info("Launching forge installer...");
-                
-                final ArrayList<String> command = new ArrayList<>();
-                command.add("java");
-                command.add("-Xmx256M");
-                command.add("-jar");
-                command.add(patchedInstaller.getAbsolutePath());
-                command.add("--installClient");
-                command.add(dirToInstall.getAbsolutePath());
+                final ModLoaderLauncherEnvironment forgeLauncherEnvironment = this.prepareModLoaderLauncher(dirToInstall, stream);
                 if(this.noGui)
-                	command.add("--nogui");
-                final ProcessBuilder processBuilder = new ProcessBuilder(command);
+                	forgeLauncherEnvironment.getCommand().add("--nogui");
+                final ProcessBuilder processBuilder = new ProcessBuilder(forgeLauncherEnvironment.getCommand());
                 
                 processBuilder.redirectOutput(Redirect.INHERIT);
                 final Process process = processBuilder.start();
                 process.waitFor();
                 
                 this.logger.info("Successfully installed Forge !");
-                FileUtils.deleteDirectory(tempDir);
+                FileUtils.deleteDirectory(forgeLauncherEnvironment.getTempDir());
             }
             catch (IOException | InterruptedException e)
             {
@@ -96,8 +60,7 @@ public class NewForgeVersion extends AbstractForgeVersion
     @Override
     protected boolean checkForgeEnv(File dirToInstall)
     {
-        final boolean hasAnotherVersions = super.checkForgeEnv(dirToInstall);
-        if(this.isCompatible() && !this.forgeVersion.contains("1.12.2") && hasAnotherVersions)
+        if(this.isCompatible() && !this.forgeVersion.contains("1.12.2") && super.checkForgeEnv(dirToInstall))
         {
             final File minecraftForgeDir = new File(dirToInstall, "libraries/net/minecraft/");
             final File mappingsDir = new File(dirToInstall, "libraries/de/");
@@ -118,7 +81,8 @@ public class NewForgeVersion extends AbstractForgeVersion
         return false;
     }
 
-    private void cleaningInstaller(File tempInstallerDir)
+    @Override
+    protected void cleanInstaller(File tempInstallerDir)
     {
         FileUtils.deleteDirectory(new File(tempInstallerDir, "net"));
         FileUtils.deleteDirectory(new File(tempInstallerDir, "com"));

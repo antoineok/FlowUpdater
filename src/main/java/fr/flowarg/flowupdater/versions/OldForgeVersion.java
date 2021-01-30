@@ -12,12 +12,10 @@ import fr.flowarg.flowupdater.utils.ModFileDeleter;
 import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.ProcessBuilder.Redirect;
 import java.net.MalformedURLException;
 import java.net.URL;
-import java.nio.file.Files;
-import java.nio.file.StandardCopyOption;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -28,7 +26,7 @@ public class OldForgeVersion extends AbstractForgeVersion
 {
     OldForgeVersion(String forgeVersion, VanillaVersion vanilla, ILogger logger, IProgressCallback callback, List<Mod> mods, List<CurseFileInfos> curseMods, ModFileDeleter fileDeleter, OptifineInfo optifine, CurseModPackInfos modPack)
     {
-        super(logger, mods, curseMods, forgeVersion, vanilla, callback, fileDeleter, optifine, modPack);
+        super(logger, mods, curseMods, forgeVersion, vanilla, callback, fileDeleter, optifine, modPack, true);
     }
     
     @Override
@@ -51,40 +49,8 @@ public class OldForgeVersion extends AbstractForgeVersion
     {
         try (BufferedInputStream stream = new BufferedInputStream(this.installerUrl.openStream()))
         {
-            this.logger.info("Downloading old forge installer...");
-            final File tempDir = new File(dirToInstall, ".flowupdater");
-            final File tempInstallerDir = new File(tempDir, "installer/");
-            final File install = new File(tempDir, "forge-installer.jar");
-            final File patches = new File(tempDir, "patches.jar");
-            final File patchedInstaller = new File(tempDir, "forge-installer-patched.jar");
-            FileUtils.deleteDirectory(tempInstallerDir);
-            install.delete();
-            patchedInstaller.delete();
-            patches.delete();
-            tempDir.mkdirs();
-            tempInstallerDir.mkdirs();
-
-            Files.copy(stream, install.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            this.logger.info("Downloading patches...");
-            Files.copy(new URL("https://flowarg.github.io/minecraft/launcher/oldpatches.jar").openStream(), patches.toPath(), StandardCopyOption.REPLACE_EXISTING);
-
-            this.logger.info("Applying patches...");
-            FileUtils.unzipJarWithLZMACompat(tempInstallerDir, install);
-            this.cleaningInstaller(tempInstallerDir);
-            FileUtils.unzipJarWithLZMACompat(tempInstallerDir, patches);
-            this.logger.info("Repack installer...");
-            this.packPatchedInstaller(tempDir, tempInstallerDir);
-            patches.delete();
-            this.logger.info("Launching forge installer...");
-            
-            final ArrayList<String> command = new ArrayList<>();
-            command.add("java");
-            command.add("-Xmx256M");
-            command.add("-jar");
-            command.add(patchedInstaller.getAbsolutePath());
-            command.add("--installClient");
-            command.add(dirToInstall.getAbsolutePath());
-            final ProcessBuilder processBuilder = new ProcessBuilder(command);
+            final ModLoaderLauncherEnvironment forgeLauncherEnvironment = this.prepareModLoaderLauncher(dirToInstall, stream);
+            final ProcessBuilder processBuilder = new ProcessBuilder(forgeLauncherEnvironment.getCommand());
             
             processBuilder.redirectOutput(Redirect.INHERIT);
             processBuilder.directory(dirToInstall);
@@ -92,7 +58,7 @@ public class OldForgeVersion extends AbstractForgeVersion
             process.waitFor();
             
             this.logger.info("Successfully installed Forge !");
-            FileUtils.deleteDirectory(tempDir);
+            FileUtils.deleteDirectory(forgeLauncherEnvironment.getTempDir());
             return true;
         }
         catch (IOException | InterruptedException e)
@@ -102,8 +68,9 @@ public class OldForgeVersion extends AbstractForgeVersion
             return false;
         }
     }
-    
-    private void cleaningInstaller(File tempInstallerDir)
+
+    @Override
+    protected void cleanInstaller(File tempInstallerDir)
     {
         FileUtils.deleteDirectory(new File(tempInstallerDir, "net"));
         FileUtils.deleteDirectory(new File(tempInstallerDir, "joptisimple"));

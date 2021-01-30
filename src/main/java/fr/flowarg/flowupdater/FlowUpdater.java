@@ -1,6 +1,5 @@
 package fr.flowarg.flowupdater;
 
-import fr.antoineok.flowupdater.versions.FabricVersion;
 import fr.flowarg.flowlogger.ILogger;
 import fr.flowarg.flowlogger.Logger;
 import fr.flowarg.flowupdater.download.*;
@@ -14,6 +13,8 @@ import fr.flowarg.flowupdater.utils.builderapi.BuilderArgument;
 import fr.flowarg.flowupdater.utils.builderapi.BuilderException;
 import fr.flowarg.flowupdater.utils.builderapi.IBuilder;
 import fr.flowarg.flowupdater.versions.AbstractForgeVersion;
+import fr.flowarg.flowupdater.versions.FabricVersion;
+import fr.flowarg.flowupdater.versions.IModLoaderVersion;
 import fr.flowarg.flowupdater.versions.VanillaVersion;
 
 import java.io.File;
@@ -34,9 +35,6 @@ public class FlowUpdater
 {
     /** Vanilla version's object to update/install */
     private final VanillaVersion version;
-
-    /** Vanilla version's JSON parser */
-    private final VanillaReader vanillaReader;
 
     /** Logger object */
     private final ILogger logger;
@@ -101,18 +99,17 @@ public class FlowUpdater
         this.logger = logger;
         this.version = version;
         this.fabricVersion = fabricVersion;
-        this.logger.info(String.format("------------------------- FlowUpdater for Minecraft %s v%s -------------------------", this.version.getName(), "1.2.9"));
+        this.logger.info(String.format("------------------------- FlowUpdater for Minecraft %s v%s -------------------------", this.version.getName(), "1.3.3"));
         this.externalFiles = externalFiles;
         this.postExecutions = postExecutions;
         this.forgeVersion = forgeVersion;
         this.updaterOptions = updaterOptions;
         this.callback = callback;
         this.downloadInfos = new DownloadInfos();
-        this.vanillaReader = new VanillaReader(this.version, this.logger, this.updaterOptions, this.callback, this.downloadInfos);
-       	this.callback.init(this.logger);
-       	if(this.updaterOptions.isEnableModsFromCurseForge() || this.updaterOptions.isInstallOptifineAsMod())
-       	    this.pluginManager = new PluginManager(this);
-       	else this.pluginManager = new FallbackPluginManager(this);
+        this.callback.init(this.logger);
+        if(this.updaterOptions.isEnableModsFromCurseForge() || this.updaterOptions.isInstallOptifineAsMod())
+            this.pluginManager = new PluginManager(this);
+        else this.pluginManager = new FallbackPluginManager(this);
     }
 
     /**
@@ -139,26 +136,7 @@ public class FlowUpdater
 
     private void checkExtFiles(File dir) throws Exception
     {
-        if(!this.externalFiles.isEmpty())
-        {
-            for(ExternalFile extFile : this.externalFiles)
-            {
-                final File file = new File(dir, extFile.getPath());
-
-                if (file.exists())
-                {
-                    if(extFile.isUpdate())
-                    {
-                        if (!getSHA1(file).equals(extFile.getSha1()))
-                        {
-                            file.delete();
-                            this.downloadInfos.getExtFiles().add(extFile);
-                        }
-                    }
-                }
-                else this.downloadInfos.getExtFiles().add(extFile);
-            }
-        }
+        this.updaterOptions.getExternalFileDeleter().delete(this.externalFiles, this.downloadInfos, dir);
     }
 
     private void updateMinecraft(File dir) throws Exception
@@ -166,65 +144,62 @@ public class FlowUpdater
         if(this.version != VanillaVersion.NULL_VERSION)
         {
             this.logger.info(String.format("Reading data about %s Minecraft version...", version.getName()));
-            this.vanillaReader.read();
+            new VanillaReader(this).read();
+
+            final File modsDir = new File(dir, "mods/");
+
+            if(this.forgeVersion != null)
+                this.checkMods(this.forgeVersion, dir);
+            if (this.fabricVersion != null)
+                this.checkMods(this.fabricVersion, dir);
+
+            if(this.fabricVersion != null)
+            {
+                if(this.updaterOptions.isEnableModsFromCurseForge())
+                    this.pluginManager.loadCurseForgePlugin(modsDir, this.fabricVersion);
+            }
 
             if(this.forgeVersion != null)
             {
-                final File modsDir = new File(dir, "mods/");
-                for(Mod mod : this.forgeVersion.getMods())
-                {
-                    final File file = new File(modsDir, mod.getName());
-
-                    if(!file.exists() || !getSHA1(file).equals(mod.getSha1()) || getFileSizeBytes(file) != mod.getSize())
-                        this.downloadInfos.getMods().add(mod);
-                }
-
                 if(this.updaterOptions.isEnableModsFromCurseForge())
                     this.pluginManager.loadCurseForgePlugin(modsDir, this.forgeVersion);
                 if(this.updaterOptions.isInstallOptifineAsMod())
                     this.pluginManager.loadOptifinePlugin(modsDir, this.forgeVersion);
             }
-            if(this.fabricVersion != null)
-            {
-                final File modsDir = new File(dir, "mods/");
-                for(Mod mod : this.fabricVersion.getMods())
-                {
-                    final File file = new File(modsDir, mod.getName());
-
-                    if(!file.exists() || !getSHA1(file).equals(mod.getSha1()) || getFileSizeBytes(file) != mod.getSize())
-                        this.downloadInfos.getMods().add(mod);
-                }
-
-                if(this.updaterOptions.isEnableModsFromCurseForge())
-                    this.pluginManager.loadCurseForgePlugin(modsDir, this.fabricVersion);
-            }
 
             if (!dir.exists())
                 dir.mkdirs();
-            final VanillaDownloader vanillaDownloader = new VanillaDownloader(dir, this.logger, this.callback, this.downloadInfos, this.updaterOptions);
+            final VanillaDownloader vanillaDownloader = new VanillaDownloader(dir, this);
             vanillaDownloader.download();
 
-            if (this.forgeVersion != null)
-            {
-                this.forgeVersion.appendDownloadInfos(this.downloadInfos);
-                if(!this.forgeVersion.isForgeAlreadyInstalled(dir))
-                    this.forgeVersion.install(dir);
-                else this.logger.info("Forge is already installed ! Skipping installation...");
-                final File modsDir = new File(dir, "mods/");
-                this.forgeVersion.installMods(modsDir, this.pluginManager);
-            }
-
-            if (this.fabricVersion != null)
-            {
-                this.fabricVersion.appendDownloadInfos(this.downloadInfos);
-                if(!this.fabricVersion.isFabricAlreadyInstalled(dir))
-                    this.fabricVersion.install(dir);
-                else this.logger.info("Fabric is already installed ! Skipping installation...");
-                final File modsDir = new File(dir, "mods/");
-                this.fabricVersion.installMods(modsDir, this.pluginManager);
-            }
+            this.installModLoader(this.forgeVersion, dir, "Forge");
+            this.installModLoader(this.fabricVersion, dir, "Fabric");
         }
         else this.downloadInfos.init();
+    }
+
+    private void checkMods(IModLoaderVersion modLoader, File modsDir) throws Exception
+    {
+        for(Mod mod : modLoader.getMods())
+        {
+            final File file = new File(modsDir, mod.getName());
+
+            if(!file.exists() || !getSHA1(file).equals(mod.getSha1()) || getFileSizeBytes(file) != mod.getSize())
+                this.downloadInfos.getMods().add(mod);
+        }
+    }
+
+    private void installModLoader(IModLoaderVersion modLoader, File dir, String name) throws Exception
+    {
+        if(modLoader != null)
+        {
+            modLoader.appendDownloadInfos(this.downloadInfos);
+            if(!modLoader.isModLoaderAlreadyInstalled(dir))
+                modLoader.install(dir);
+            else this.logger.info(name + " is already installed ! Skipping installation...");
+            final File modsDir = new File(dir, "mods/");
+            modLoader.installMods(modsDir, this.pluginManager);
+        }
     }
 
     private void updateExtFiles(File dir)
@@ -265,7 +240,7 @@ public class FlowUpdater
         this.pluginManager.shutdown();
     }
 
-	/**
+    /**
      * Builder of {@link FlowUpdater}.
      * @author Flow Arg (FlowArg)
      */
@@ -378,19 +353,21 @@ public class FlowUpdater
         @Override
         public FlowUpdater build() throws BuilderException
         {
-            return new FlowUpdater(this.versionArgument.get(),
+            return new FlowUpdater(
+                    this.versionArgument.get(),
                     this.loggerArgument.get(),
                     this.updaterOptionsArgument.get(),
                     this.progressCallbackArgument.get(),
                     this.externalFilesArgument.get(),
                     this.postExecutionsArgument.get(),
-                    this.forgeVersionArgument.get(), this.fabricVersionArgument.get());
+                    this.forgeVersionArgument.get(),
+                    this.fabricVersionArgument.get()
+            );
         }
     }
 
     // Some getters
 
-    public VanillaReader getVanillaReader() { return this.vanillaReader; }
     public VanillaVersion getVersion() { return this.version; }
     public ILogger getLogger() { return this.logger; }
     public AbstractForgeVersion getForgeVersion() { return this.forgeVersion; }
